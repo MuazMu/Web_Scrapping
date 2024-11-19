@@ -62,7 +62,7 @@ def scrape_migros(product_name):
                 price = product.find_element(By.CSS_SELECTOR, ".product-price").text
                 price = float(price.replace('TL', '').replace('.', '').replace(',', '.'))
                 results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "Migros"})
-            except Exception as e:
+            except Exception:
                 continue
 
         driver.quit()
@@ -71,6 +71,31 @@ def scrape_migros(product_name):
         print(f"Error scraping Migros: {e}")
         return []
 
+# Function to scrape CarrefourSA
+def scrape_carrefour(product_name):
+    try:
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+        url = f"https://www.carrefoursa.com/search/?text={product_name}"
+        driver.get(url)
+        product_elements = driver.find_elements(By.CSS_SELECTOR, ".product-item")
+
+        results = []
+        for product in product_elements[:5]:
+            try:
+                name = product.find_element(By.CSS_SELECTOR, ".product-title").text
+                brand = name.split()[0]  # Extract the brand name
+                price = product.find_element(By.CSS_SELECTOR, ".price-tag").text
+                price = float(price.replace('TL', '').replace('.', '').replace(',', '.'))
+                results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "CarrefourSA"})
+            except Exception:
+                continue
+
+        driver.quit()
+        return results
+    except Exception as e:
+        print(f"Error scraping CarrefourSA: {e}")
+        return []
+    
 # Function to save only the cheapest and most expensive product in the database
 def save_to_database(products):
     try:
