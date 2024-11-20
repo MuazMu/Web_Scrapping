@@ -142,8 +142,10 @@ def scrape():
     product_name = request.args.get('product_name')
     amazon_data = scrape_amazon(product_name)
     migros_data = scrape_migros(product_name)
+    carefour_data = scrape_carrefour(product_name)
+    
 
-    all_products = amazon_data + migros_data
+    all_products = amazon_data + migros_data + carefour_data
    
     if all_products:
         save_to_database(all_products)
