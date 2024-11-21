@@ -140,13 +140,13 @@ def save_to_database(products):
 @app.route('/scrape', methods=['GET'])
 def scrape():
     product_name = request.args.get('product_name')
-    #amazon_data = scrape_amazon(product_name)
-   # migros_data = scrape_migros(product_name)
+    amazon_data = scrape_amazon(product_name)
+    migros_data = scrape_migros(product_name)
     carrefour_data = scrape_carrefour(product_name)
 
-    all_products =   carrefour_data
-    #amazon_data +
-   # migros_data +
+    all_products =   amazon_data + migros_data + carrefour_data
+   
+  
     if all_products:
         save_to_database(all_products)
         cheapest = min(all_products, key=lambda x: x['price'])
@@ -159,8 +159,8 @@ def scrape():
 def scheduled_updates():
     products_to_check = ["water", "milk", "bread", "eggs"]
     for product in products_to_check:
-       # scrape_amazon(product)
-        #scrape_migros(product)
+        scrape_amazon(product)
+        scrape_migros(product)
         scrape_carrefour(product)
 
 schedule.every(24).hours.do(scheduled_updates)
