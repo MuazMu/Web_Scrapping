@@ -17,11 +17,12 @@ conn_str = r"DRIVER={ODBC Driver 17 for SQL Server};SERVER=LAPTOP-Q6J5AJCG\SQLEX
 
 # Selenium setup
 chrome_options = Options()
-chrome_options.add_argument("--headless")  # Run in headless mode
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
+chrome_options.add_argument("--headless")  # Enable headless for performance
 
 # Function to scrape Amazon
+
 def scrape_amazon(product_name):
     try:
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
@@ -30,14 +31,14 @@ def scrape_amazon(product_name):
         product_elements = driver.find_elements(By.CSS_SELECTOR, ".s-main-slot .s-result-item")
 
         results = []
-        for product in product_elements[:5]:  # Limit to first 5 results for efficiency
+        for product in product_elements[:5]:  # Limit to first 5 results
             try:
                 name = product.find_element(By.CSS_SELECTOR, "h2 a span").text
-                brand = name.split()[0]  # Extract the brand name (first word)
+                brand = name.split()[0]
                 price = product.find_element(By.CSS_SELECTOR, ".a-price-whole").text
-                price = float(price.replace('.', '').replace(',', '.'))  # Convert to float
+                price = float(price.replace('.', '').replace(',', '.'))
                 results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "Amazon"})
-            except Exception as e:
+            except Exception:
                 continue
 
         driver.quit()
@@ -57,9 +58,9 @@ def scrape_migros(product_name):
         results = []
         for product in product_elements[:5]:
             try:
-                name = product.find_element(By.CSS_SELECTOR, ".product-title").text
-                brand = name.split()[0]  # Extract the brand name
-                price = product.find_element(By.CSS_SELECTOR, ".product-price").text
+                name = product.find_element(By.CSS_SELECTOR, ".product-name").text
+                brand = name.split()[0]
+                price = product.find_element(By.CSS_SELECTOR, ".price-tag").text
                 price = float(price.replace('TL', '').replace('.', '').replace(',', '.'))
                 results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "Migros"})
             except Exception:
@@ -77,13 +78,13 @@ def scrape_carrefour(product_name):
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
         url = f"https://www.carrefoursa.com/search/?text={product_name}"
         driver.get(url)
-        product_elements = driver.find_elements(By.CSS_SELECTOR, ".product-item")
+        product_elements = driver.find_elements(By.CSS_SELECTOR, ".pl-grid-cont .item-box")
 
         results = []
         for product in product_elements[:5]:
             try:
-                name = product.find_element(By.CSS_SELECTOR, ".product-title").text
-                brand = name.split()[0]  # Extract the brand name
+                name = product.find_element(By.CSS_SELECTOR, ".item-name").text
+                brand = name.split()[0]
                 price = product.find_element(By.CSS_SELECTOR, ".price-tag").text
                 price = float(price.replace('TL', '').replace('.', '').replace(',', '.'))
                 results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "CarrefourSA"})
@@ -95,18 +96,17 @@ def scrape_carrefour(product_name):
     except Exception as e:
         print(f"Error scraping CarrefourSA: {e}")
         return []
-    
-# Function to save only the cheapest and most expensive product in the database
+
+# Function to save only the cheapest and most expensive products in the database
 def save_to_database(products):
     try:
         connection = pyodbc.connect(conn_str)
         cursor = connection.cursor()
 
-        # Find the cheapest and most expensive products
         cheapest = min(products, key=lambda x: x['price'])
         most_expensive = max(products, key=lambda x: x['price'])
 
-        # Insert or update the cheapest product
+        # Save cheapest
         cursor.execute("""
             MERGE INTO Prices AS target
             USING (SELECT ? AS ProductName, ? AS BrandName, ? AS Price, ? AS StoreName) AS source
@@ -118,7 +118,7 @@ def save_to_database(products):
                 VALUES (source.ProductName, source.BrandName, source.Price, source.StoreName);
         """, (cheapest['product_name'], cheapest['brand_name'], cheapest['price'], cheapest['store_name']))
 
-        # Insert or update the most expensive product
+        # Save most expensive
         cursor.execute("""
             MERGE INTO Prices AS target
             USING (SELECT ? AS ProductName, ? AS BrandName, ? AS Price, ? AS StoreName) AS source
@@ -140,20 +140,17 @@ def save_to_database(products):
 @app.route('/scrape', methods=['GET'])
 def scrape():
     product_name = request.args.get('product_name')
-    amazon_data = scrape_amazon(product_name)
-    migros_data = scrape_migros(product_name)
-    carefour_data = scrape_carrefour(product_name)
-    
+    #amazon_data = scrape_amazon(product_name)
+   # migros_data = scrape_migros(product_name)
+    carrefour_data = scrape_carrefour(product_name)
 
-    all_products = amazon_data + migros_data + carefour_data
-   
+    all_products =   carrefour_data
+    #amazon_data +
+   # migros_data +
     if all_products:
         save_to_database(all_products)
-
-        # Find and return the cheapest and most expensive products
         cheapest = min(all_products, key=lambda x: x['price'])
         most_expensive = max(all_products, key=lambda x: x['price'])
-
         return jsonify({"cheapest": cheapest, "most_expensive": most_expensive})
 
     return jsonify({"error": "No products found"})
@@ -162,8 +159,9 @@ def scrape():
 def scheduled_updates():
     products_to_check = ["water", "milk", "bread", "eggs"]
     for product in products_to_check:
-        scrape_amazon(product)
-        scrape_migros(product)
+       # scrape_amazon(product)
+        #scrape_migros(product)
+        scrape_carrefour(product)
 
 schedule.every(24).hours.do(scheduled_updates)
 
