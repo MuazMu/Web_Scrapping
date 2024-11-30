@@ -1,134 +1,256 @@
+import os
 import json
 import pyodbc
 import schedule
 import time
-from flask import Flask, request, jsonify
+import logging
+from typing import List, Dict, Optional
+from dataclasses import dataclass, asdict
+from flask import Flask, request, jsonify, render_template
+from flask_cors import CORS
 from selenium import webdriver
-from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from bs4 import BeautifulSoup as soup
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
 from webdriver_manager.chrome import ChromeDriverManager
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime
+import threading
 
-# Initialize Flask app
-app = Flask(__name__)
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('price_comparison.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
-# Database connection string
-conn_str = r"DRIVER={ODBC Driver 17 for SQL Server};SERVER=LAPTOP-Q6J5AJCG\SQLEXPRESS;DATABASE=Market_Automation;Trusted_Connection=yes;"
+# Data Model
+Base = declarative_base()
 
-# Selenium setup
-chrome_options = Options()
-chrome_options.add_argument("--headless")  # Run in headless mode
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
+class ProductPrice(Base):
+    __tablename__ = 'product_prices'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    product_name = Column(String, nullable=False)
+    brand_name = Column(String)
+    store_name = Column(String)
+    price = Column(Float, nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    image_url = Column(String)
+    product_url = Column(String)
 
-# Utility to clean prices
-def get_price(price_str):
-    clean_price = ''.join(c if c.isdigit() or c == '.' else '' for c in price_str)
-    return float(clean_price) if clean_price else 0.0
+@dataclass
+class ProductScraper:
+    name: str
+    url_template: str
+    selectors: Dict[str, str]
+    store_name: str
 
-# Scraper for a generic website (Selenium + BeautifulSoup)
-def scrape_website(url, product_name, selectors):
-    try:
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-        driver.get(url.format(product_name))
-        time.sleep(2)  # Wait for dynamic content to load
+class PriceComparisonSystem:
+    def __init__(self, database_url='sqlite:///price_comparison.db'):
+        # Database setup
+        self.engine = create_engine(database_url)
+        Base.metadata.create_all(self.engine)
+        self.Session = sessionmaker(bind=self.engine)
 
-        page_html = driver.page_source
-        driver.quit()
+        # Selenium setup
+        self.chrome_options = Options()
+        self.chrome_options.add_argument("--headless")
+        self.chrome_options.add_argument("--no-sandbox")
+        self.chrome_options.add_argument("--disable-dev-shm-usage")
 
-        page_soup = soup(page_html, "html.parser")
-        products = page_soup.select(selectors['product'])
+        # Scrapers configuration
+        self.scrapers = [
+            ProductScraper(
+                name="Amazon",
+                url_template="https://www.amazon.com.tr/s?k={}",
+                selectors={
+                    "product": ".s-main-slot .s-result-item",
+                    "name": "h2 a span",
+                    "price": ".a-price-whole",
+                    "image": "img.s-image",
+                    "link": "h2 a",
+                    "brand": ".s-line-clamp-1"
+                },
+                store_name="Amazon"
+            ),
+            ProductScraper(
+                name="Migros",
+                url_template="https://www.migros.com.tr/arama?q={}",
+                selectors={
+                    "product": ".product-card-wrapper",
+                    "name": ".product-title",
+                    "price": ".product-price",
+                    "image": "img",
+                    "link": "a",
+                    "brand": ".product-brand"
+                },
+                store_name="Migros"
+            ),
+            ProductScraper(
+                name="Carrefour",
+                url_template="https://www.carrefoursa.com/search/?text={}",
+                selectors={
+                    "product": ".pl-grid-cont",
+                    "name": ".product-title",
+                    "price": ".product-price",
+                    "image": "img",
+                    "link": "a",
+                    "brand": ".product-brand"
+                },
+                store_name="Carrefour"
+            )
+        ]
 
-        results = []
-        for product in products[:5]:  # Limit to 5 results
-            try:
-                name = product.select_one(selectors['name']).text.strip()
-                price = get_price(product.select_one(selectors['price']).text.strip())
-                image = product.select_one(selectors['image'])['src']
-                link = product.select_one(selectors['link'])['href']
-                results.append({"product_name": name, "price": price, "image": image, "link": link})
-            except Exception as e:
-                continue
-        return results
-    except Exception as e:
-        print(f"Error scraping {url}: {e}")
-        return []
+    def _clean_price(self, price_str: str) -> float:
+        """Clean and convert price string to float."""
+        clean_price = ''.join(c if c.isdigit() or c == '.' else '' for c in price_str)
+        return float(clean_price) if clean_price else 0.0
 
-# Scrapers for specific websites
-def scrape_amazon(product_name):
-    selectors = {
-        "product": ".s-main-slot .s-result-item",
-        "name": "h2 a span",
-        "price": ".a-price-whole",
-        "image": "img.s-image",
-        "link": "h2 a",
-    }
-    url = "https://www.amazon.com.tr/s?k={}"
-    return scrape_website(url, product_name, selectors)
+    def scrape_website(self, scraper: ProductScraper, product_name: str) -> List[Dict]:
+        """Scrape a specific website for product information."""
+        try:
+            driver = webdriver.Chrome(
+                service=Service(ChromeDriverManager().install()),
+                options=self.chrome_options
+            )
+            driver.get(scraper.url_template.format(product_name))
+            
+            # Wait for dynamic content
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, scraper.selectors['product']))
+            )
 
-def scrape_migros(product_name):
-    selectors = {
-        "product": ".product-card-wrapper",
-        "name": ".product-title",
-        "price": ".product-price",
-        "image": "img",
-        "link": "a",
-    }
-    url = "https://www.migros.com.tr/arama?q={}"
-    return scrape_website(url, product_name, selectors)
+            page_soup = BeautifulSoup(driver.page_source, "html.parser")
+            products = page_soup.select(scraper.selectors['product'])
 
-def scrape_carrefour(product_name):
-    selectors = {
-        "product": ".pl-grid-cont",
-        "name": ".product-title",
-        "price": ".product-price",
-        "image": "img",
-        "link": "a",
-    }
-    url = "https://www.carrefoursa.com/search/?text={}"
-    return scrape_website(url, product_name, selectors)
+            results = []
+            for product in products[:5]:  # Limit results
+                try:
+                    name = product.select_one(scraper.selectors['name']).text.strip()
+                    price = self._clean_price(product.select_one(scraper.selectors['price']).text.strip())
+                    image = product.select_one(scraper.selectors['image'])['src']
+                    link = product.select_one(scraper.selectors['link'])['href']
+                    brand = product.select_one(scraper.selectors.get('brand', '')).text.strip() if 'brand' in scraper.selectors else "N/A"
 
-# Save to database
-def save_to_database(products):
-    try:
-        connection = pyodbc.connect(conn_str)
-        cursor = connection.cursor()
-        for product in products:
-            cursor.execute("""
-                MERGE INTO Prices AS target
-                USING (SELECT ? AS ProductName, ? AS Price) AS source
-                ON target.ProductName = source.ProductName
-                WHEN MATCHED THEN UPDATE SET Price = source.Price, Timestamp = GETDATE()
-                WHEN NOT MATCHED THEN INSERT (ProductName, Price) VALUES (source.ProductName, source.Price);
-            """, (product['product_name'], product['price']))
-        connection.commit()
-        cursor.close()
-        connection.close()
-    except Exception as e:
-        print(f"Database error: {e}")
+                    results.append({
+                        "product_name": name,
+                        "price": price,
+                        "brand_name": brand,
+                        "store_name": scraper.store_name,
+                        "image": image,
+                        "link": link
+                    })
+                except Exception as e:
+                    logger.error(f"Error processing product: {e}")
 
-# API route
-@app.route('/scrape', methods=['GET'])
-def scrape():
-    product_name = request.args.get('product_name', '')
-    all_results = scrape_amazon(product_name) + scrape_migros(product_name) + scrape_carrefour(product_name)
-    if all_results:
-        save_to_database(all_results)
+            driver.quit()
+            return results
+
+        except Exception as e:
+            logger.error(f"Error scraping {scraper.name}: {e}")
+            return []
+
+    def compare_prices(self, product_name: str) -> Dict:
+        """Compare prices across multiple stores."""
+        all_results = []
+        threads = []
+
+        # Parallel scraping
+        def scrape_and_extend(scraper):
+            results = self.scrape_website(scraper, product_name)
+            all_results.extend(results)
+
+        for scraper in self.scrapers:
+            thread = threading.Thread(target=scrape_and_extend, args=(scraper,))
+            thread.start()
+            threads.append(thread)
+
+        for thread in threads:
+            thread.join()
+
+        if not all_results:
+            return {"error": "No products found"}
+
+        # Save results to database
+        self._save_to_database(all_results)
+
+        # Find cheapest and most expensive
         cheapest = min(all_results, key=lambda x: x['price'])
         most_expensive = max(all_results, key=lambda x: x['price'])
-        return jsonify({"cheapest": cheapest, "most_expensive": most_expensive})
-    return jsonify({"error": "No products found"})
 
-# Scheduler
-def scheduled_updates():
-    products = ["milk", "bread", "water"]
-    for product in products:
-        scrape_amazon(product)
-        scrape_migros(product)
-        scrape_carrefour(product)
+        return {
+            "cheapest": cheapest,
+            "most_expensive": most_expensive,
+            "all_results": all_results
+        }
 
-schedule.every().day.at("00:00").do(scheduled_updates)
+    def _save_to_database(self, products: List[Dict]):
+        """Save product prices to database."""
+        session = self.Session()
+        try:
+            for product in products:
+                db_product = ProductPrice(
+                    product_name=product['product_name'],
+                    brand_name=product['brand_name'],
+                    store_name=product['store_name'],
+                    price=product['price'],
+                    image_url=product['image'],
+                    product_url=product['link']
+                )
+                session.merge(db_product)
+            session.commit()
+        except Exception as e:
+            logger.error(f"Database error: {e}")
+            session.rollback()
+        finally:
+            session.close()
+
+# Flask API
+app = Flask(__name__)
+CORS(app)
+price_system = PriceComparisonSystem()
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/compare', methods=['GET'])
+def compare_prices():
+    product_name = request.args.get('product_name', '')
+    if not product_name:
+        return jsonify({"error": "Product name is required"}), 400
+    
+    result = price_system.compare_prices(product_name)
+    return jsonify(result)
+
+def run_scheduler():
+    """Background scheduler for periodic updates."""
+    schedule.every().day.at("00:00").do(update_periodic_products)
+    
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+def update_periodic_products():
+    """Update prices for common grocery items."""
+    common_products = ["milk", "bread", "eggs", "water", "cheese"]
+    for product in common_products:
+        price_system.compare_prices(product)
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # Start scheduler in a separate thread
+    scheduler_thread = threading.Thread(target=run_scheduler)
+    scheduler_thread.start()
+
+    # Run Flask app
+    app.run(debug=True, use_reloader=False)
