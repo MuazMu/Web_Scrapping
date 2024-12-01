@@ -47,7 +47,7 @@ class PriceComparisonSystem:
     def __init__(self, database_url=None):
         self.database_url = database_url or os.getenv(
             "DATABASE_URL",
-            r"mssql+pyodbc://LAPTOP-Q6J5AJCG\\SQLEXPRESS/Market_Automation?driver=ODBC+Driver+17+for+SQL+Server&Trusted_Connection=yes",
+            r"mssql+pyodbc://@localhost\SQLEXPRESS/Market_Automation?driver=ODBC+Driver+17+for+SQL+Server&Trusted_Connection=yes",
         )
         self.engine = create_engine(self.database_url)
         Base.metadata.create_all(self.engine)
