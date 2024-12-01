@@ -83,6 +83,19 @@ class PriceComparisonSystem:
                 },
                 "store_name": "Migros",
             },
+            {            
+                "name": "Carrefour",
+                "url_template": "https://www.carrefoursa.com/search/?text={}",
+                "selectors": {
+                    "product": ".pl-grid-cont",
+                    "name": ".product-title",
+                    "price": ".product-price",
+                    "image": "img",
+                    "link": "a",
+                    "brand": ".product-brand",
+                },
+                "store_name": "Carrefour",
+            },
         ]
 
     def _clean_price(self, price_str):
