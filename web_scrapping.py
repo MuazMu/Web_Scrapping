@@ -1,6 +1,5 @@
 import os
 import json
-import logging
 import threading
 import time
 from flask import Flask, request, jsonify
@@ -19,14 +18,6 @@ from datetime import datetime
 import re
 import schedule
 
-# Logging Configuration
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()],
-)
-logger = logging.getLogger("PriceComparison")
-
 # SQLAlchemy Base
 Base = declarative_base()
 
@@ -40,7 +31,6 @@ class ProductPrice(Base):
     price = Column(Float, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
     image_url = Column(String)
-    product_url = Column(String)
 
 # Price Comparison System
 class PriceComparisonSystem:
@@ -129,55 +119,82 @@ class PriceComparisonSystem:
                 })
             return results
         except Exception as e:
-            logger.error(f"Error scraping {scraper['name']}: {e}")
+            print(f"Error scraping {scraper['name']}: {e}")
             return []
         finally:
             driver.quit()
 
-    def update_cheapest_and_expensive(self, product_name):
+    def update_product_prices(self, product_name):
         session = self.Session()
         try:
             results = []
             for scraper in self.scrapers:
                 results.extend(self.scrape_website(scraper, product_name))
+            
             if results:
                 cheapest = min(results, key=lambda x: x["price"])
                 most_expensive = max(results, key=lambda x: x["price"])
+                
                 session.add_all([
                     ProductPrice(**cheapest),
                     ProductPrice(**most_expensive),
                 ])
                 session.commit()
+                return cheapest, most_expensive
+            return None, None
         except Exception as e:
-            logger.error(f"Error updating database: {e}")
+            print(f"Error updating database: {e}")
+            return None, None
         finally:
             session.close()
 
-# Flask Application
+    def get_product_prices(self, product_name):
+        session = self.Session()
+        try:
+            products = session.query(ProductPrice).filter(
+                ProductPrice.product_name.ilike(f"%{product_name}%")
+            ).all()
+            return products
+        except Exception as e:
+            print(f"Error retrieving products: {e}")
+            return []
+        finally:
+            session.close()
+
+
 app = Flask(__name__)
-CORS(app)
-price_system = PriceComparisonSystem()
+
+DATABASE_URL = "mssql+pyodbc://@localhost\\SQLEXPRESS/Market_Automation?driver=ODBC+Driver+17+for+SQL+Server&Trusted_Connection=yes"
+engine = create_engine(DATABASE_URL)
+Base.metadata.create_all(engine)
+Session = sessionmaker(bind=engine)
 
 @app.route("/compare", methods=["GET"])
 def compare_prices():
     product_name = request.args.get("product_name", "").strip()
     if not product_name:
         return jsonify({"error": "Product name is required"}), 400
-    try:
-        session = price_system.Session()
-        results = session.query(ProductPrice).all()
-        return jsonify([{"id": r.id, "name": r.product_name, "price": r.price} for r in results])
-    except Exception as e:
-        logger.error(f"Error in /compare: {e}")
-        return jsonify({"error": "Internal server error"}), 500
 
-# Schedule Automated Updates
-def schedule_updates():
-    schedule.every(24).hours.do(lambda: price_system.update_cheapest_and_expensive("laptop"))
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+    session = Session()
+    try:
+        results = session.query(ProductPrice).filter(ProductPrice.product_name.ilike(f"%{product_name}%")).all()
+        if not results:
+            return jsonify({"error": "No products found"}), 404
+
+        response = [{"id": r.id, "product_name": r.product_name, "brand_name": r.brand_name, "price": r.price, "store_name": r.store_name, "image": r.image_url} for r in results]
+        return jsonify({"products": response})
+    finally:
+        session.close()
+
+@app.route("/history", methods=["GET"])
+def fetch_history():
+    session = Session()
+    try:
+        results = session.query(ProductPrice).all()
+        response = [{"product_name": r.product_name, "brand_name": r.brand_name, "store_name": r.store_name, "price": r.price, "timestamp": r.timestamp.isoformat()} for r in results]
+        return jsonify(response)
+    finally:
+        session.close()
 
 if __name__ == "__main__":
-    threading.Thread(target=schedule_updates, daemon=True).start()
-    app.run(debug=True)
+    app.run(debug=True, host="127.0.0.1", port=5000)
