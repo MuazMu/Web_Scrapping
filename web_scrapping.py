@@ -1,6 +1,5 @@
 import os
 import json
-import threading
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from selenium import webdriver
@@ -9,7 +8,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from bs4 import BeautifulSoup
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base
 from datetime import datetime
@@ -46,18 +44,21 @@ class PriceComparisonSystem:
         self.chrome_options.add_argument("--headless")
         self.chrome_options.add_argument("--disable-dev-shm-usage")
         self.chrome_options.add_argument("--no-sandbox")
+        self.chrome_options.add_argument(
+            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
+        )
 
-        self.scrapers = [                
-           {
+        self.scrapers = [
+            {
                 "name": "BIM",
                 "url_template": "https://www.bim.com.tr/Categories?q={}",
                 "selectors": {
                     "product": ".product-list .product",
                     "name": ".product-name",
                     "price": ".price",
-                    "image": "img.product-image"
+                    "image": "img.product-image",
                 },
-                "store_name": "BIM"
+                "store_name": "BIM",
             },
             {
                 "name": "A101",
@@ -66,22 +67,21 @@ class PriceComparisonSystem:
                     "product": ".product-card",
                     "name": ".name",
                     "price": ".price",
-                    "image": ".product-image img"
+                    "image": ".product-image img",
                 },
-                "store_name": "A101"
+                "store_name": "A101",
             },
-           {
+            {
                 "name": "Carrefour",
                 "url_template": "https://www.carrefoursa.com/search/?text={}",
                 "selectors": {
                     "product": ".product-card",
                     "name": ".product-name",
                     "price": ".price",
-                    "image": ".product-image img"
+                    "image": ".product-image img",
                 },
-                "store_name": "Carrefour"
-            }
-
+                "store_name": "Carrefour",
+            },
         ]
 
     def _clean_price(self, price_str):
@@ -97,26 +97,28 @@ class PriceComparisonSystem:
         )
         try:
             driver.get(scraper["url_template"].format(product_name))
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, scraper["selectors"]["product"]))
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, scraper["selectors"]["product"]))
             )
-            soup = BeautifulSoup(driver.page_source, "html.parser")
-            products = soup.select(scraper["selectors"]["product"])
+            products = driver.find_elements(By.CSS_SELECTOR, scraper["selectors"]["product"])
             results = []
+
             for product in products[:5]:
-                name = product.select_one(scraper["selectors"]["name"])
-                price = product.select_one(scraper["selectors"]["price"])
-                image = product.select_one(scraper["selectors"]["image"])
+                try:
+                    name = product.find_element(By.CSS_SELECTOR, scraper["selectors"]["name"]).text.strip()
+                    price_element = product.find_element(By.CSS_SELECTOR, scraper["selectors"]["price"])
+                    price = self._clean_price(price_element.text)
+                    image = product.find_element(By.CSS_SELECTOR, scraper["selectors"]["image"]).get_attribute("src")
 
-                if not name or not price:
-                    continue
-
-                results.append({
-                    "product_name": name.text.strip(),
-                    "price": self._clean_price(price.text),
-                    "store_name": scraper["store_name"],
-                    "image_url": image["src"] if image else None,
-                })
+                    if name and price:
+                        results.append({
+                            "product_name": name,
+                            "price": price,
+                            "store_name": scraper["store_name"],
+                            "image_url": image or None,
+                        })
+                except Exception as e:
+                    print(f"Error parsing product in {scraper['name']}: {e}")
             return results
         except Exception as e:
             print(f"Error scraping {scraper['name']}: {e}")
@@ -135,10 +137,7 @@ class PriceComparisonSystem:
                 cheapest = min(results, key=lambda x: x["price"])
                 most_expensive = max(results, key=lambda x: x["price"])
 
-                session.add_all([
-                    ProductPrice(**cheapest),
-                    ProductPrice(**most_expensive),
-                ])
+                session.add_all([ProductPrice(**cheapest), ProductPrice(**most_expensive)])
                 session.commit()
                 return cheapest, most_expensive
             return None, None
