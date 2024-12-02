@@ -47,40 +47,41 @@ class PriceComparisonSystem:
         self.chrome_options.add_argument("--disable-dev-shm-usage")
         self.chrome_options.add_argument("--no-sandbox")
 
-        self.scrapers = [
-            {
-                "name": "Amazon TR",
-                "url_template": "https://www.amazon.com.tr/s?k={}",
+        self.scrapers = [                
+           {
+                "name": "BIM",
+                "url_template": "https://www.bim.com.tr/Categories?q={}",
                 "selectors": {
-                    "product": ".s-result-item",
-                    "name": "h2 a span",
-                    "price": ".a-price-whole",
-                    "image": "img.s-image",
+                    "product": ".product-list .product",
+                    "name": ".product-name",
+                    "price": ".price",
+                    "image": "img.product-image"
                 },
-                "store_name": "Amazon",
+                "store_name": "BIM"
             },
             {
-                "name": "Migros",
-                "url_template": "https://www.migros.com.tr/arama?q={}",
+                "name": "A101",
+                "url_template": "https://www.a101.com.tr/arama?k={}",
                 "selectors": {
-                    "product": ".product-card-wrapper",
-                    "name": ".product-title",
-                    "price": ".product-price",
-                    "image": "img",
+                    "product": ".product-card",
+                    "name": ".name",
+                    "price": ".price",
+                    "image": ".product-image img"
                 },
-                "store_name": "Migros",
+                "store_name": "A101"
             },
-            {
+           {
                 "name": "Carrefour",
                 "url_template": "https://www.carrefoursa.com/search/?text={}",
                 "selectors": {
-                    "product": ".pl-grid-cont",
-                    "name": ".product-title",
-                    "price": ".product-price",
-                    "image": "img",
+                    "product": ".product-card",
+                    "name": ".product-name",
+                    "price": ".price",
+                    "image": ".product-image img"
                 },
-                "store_name": "Carrefour",
-            },
+                "store_name": "Carrefour"
+            }
+
         ]
 
     def _clean_price(self, price_str):
