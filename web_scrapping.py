@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from datetime import datetime
 import re
 from apscheduler.schedulers.background import BackgroundScheduler
+from webdriver_manager.chrome import ChromeDriverManager
 
 # SQLAlchemy Base
 Base = declarative_base()
