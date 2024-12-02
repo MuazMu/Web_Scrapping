@@ -41,7 +41,7 @@ class PriceComparisonSystem:
         self.Session = sessionmaker(bind=self.engine)
 
         self.chrome_options = Options()
-        self.chrome_options.add_argument("--headless")
+        #self.chrome_options.add_argument("--headless")
         self.chrome_options.add_argument("--disable-dev-shm-usage")
         self.chrome_options.add_argument("--no-sandbox")
         self.chrome_options.add_argument(
@@ -49,6 +49,29 @@ class PriceComparisonSystem:
         )
 
         self.scrapers = [
+               {
+                "name": "Carrefour",
+                "url_template": "https://www.carrefoursa.com/search/?text={}",
+                "selectors": {
+                    "product": ".product-card",
+                    "name": ".product-name",
+                    "price": ".price",
+                    "image": ".product-image img",
+                },
+                "store_name": "Carrefour",
+            },
+            {
+               "name": "A101",
+               "url_template": "https://www.a101.com.tr/arama?k={}",
+               "selectors": {
+                    "product": ".product-card",
+                    "name": ".name",
+                    "price": ".price",
+                    "image": ".product-image img",
+                },
+                "store_name": "A101",
+            },
+         
             {
                 "name": "BIM",
                 "url_template": "https://www.bim.com.tr/Categories?q={}",
@@ -60,28 +83,7 @@ class PriceComparisonSystem:
                 },
                 "store_name": "BIM",
             },
-            {
-                "name": "A101",
-                "url_template": "https://www.a101.com.tr/arama?k={}",
-                "selectors": {
-                    "product": ".product-card",
-                    "name": ".name",
-                    "price": ".price",
-                    "image": ".product-image img",
-                },
-                "store_name": "A101",
-            },
-            {
-                "name": "Carrefour",
-                "url_template": "https://www.carrefoursa.com/search/?text={}",
-                "selectors": {
-                    "product": ".product-card",
-                    "name": ".product-name",
-                    "price": ".price",
-                    "image": ".product-image img",
-                },
-                "store_name": "Carrefour",
-            },
+            
         ]
 
     def _clean_price(self, price_str):
