@@ -1,7 +1,6 @@
 import os
 import json
 import threading
-import time
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from selenium import webdriver
@@ -11,12 +10,11 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
-from webdriver_manager.chrome import ChromeDriverManager
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base
 from datetime import datetime
 import re
-import schedule
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # SQLAlchemy Base
 Base = declarative_base()
@@ -57,7 +55,6 @@ class PriceComparisonSystem:
                     "name": "h2 a span",
                     "price": ".a-price-whole",
                     "image": "img.s-image",
-                    "link": "h2 a",
                 },
                 "store_name": "Amazon",
             },
@@ -69,11 +66,10 @@ class PriceComparisonSystem:
                     "name": ".product-title",
                     "price": ".product-price",
                     "image": "img",
-                    "link": "a",
                 },
                 "store_name": "Migros",
             },
-            {            
+            {
                 "name": "Carrefour",
                 "url_template": "https://www.carrefoursa.com/search/?text={}",
                 "selectors": {
@@ -81,8 +77,6 @@ class PriceComparisonSystem:
                     "name": ".product-title",
                     "price": ".product-price",
                     "image": "img",
-                    "link": "a",
-                    "brand": ".product-brand",
                 },
                 "store_name": "Carrefour",
             },
@@ -110,12 +104,16 @@ class PriceComparisonSystem:
             for product in products[:5]:
                 name = product.select_one(scraper["selectors"]["name"])
                 price = product.select_one(scraper["selectors"]["price"])
+                image = product.select_one(scraper["selectors"]["image"])
+
                 if not name or not price:
                     continue
+
                 results.append({
                     "product_name": name.text.strip(),
                     "price": self._clean_price(price.text),
                     "store_name": scraper["store_name"],
+                    "image_url": image["src"] if image else None,
                 })
             return results
         except Exception as e:
@@ -130,11 +128,11 @@ class PriceComparisonSystem:
             results = []
             for scraper in self.scrapers:
                 results.extend(self.scrape_website(scraper, product_name))
-            
+
             if results:
                 cheapest = min(results, key=lambda x: x["price"])
                 most_expensive = max(results, key=lambda x: x["price"])
-                
+
                 session.add_all([
                     ProductPrice(**cheapest),
                     ProductPrice(**most_expensive),
@@ -148,26 +146,10 @@ class PriceComparisonSystem:
         finally:
             session.close()
 
-    def get_product_prices(self, product_name):
-        session = self.Session()
-        try:
-            products = session.query(ProductPrice).filter(
-                ProductPrice.product_name.ilike(f"%{product_name}%")
-            ).all()
-            return products
-        except Exception as e:
-            print(f"Error retrieving products: {e}")
-            return []
-        finally:
-            session.close()
-
-
 app = Flask(__name__)
+CORS(app)
 
-DATABASE_URL = "mssql+pyodbc://@localhost\\SQLEXPRESS/Market_Automation?driver=ODBC+Driver+17+for+SQL+Server&Trusted_Connection=yes"
-engine = create_engine(DATABASE_URL)
-Base.metadata.create_all(engine)
-Session = sessionmaker(bind=engine)
+price_system = PriceComparisonSystem()
 
 @app.route("/compare", methods=["GET"])
 def compare_prices():
@@ -175,26 +157,46 @@ def compare_prices():
     if not product_name:
         return jsonify({"error": "Product name is required"}), 400
 
-    session = Session()
-    try:
-        results = session.query(ProductPrice).filter(ProductPrice.product_name.ilike(f"%{product_name}%")).all()
-        if not results:
-            return jsonify({"error": "No products found"}), 404
-
-        response = [{"id": r.id, "product_name": r.product_name, "brand_name": r.brand_name, "price": r.price, "store_name": r.store_name, "image": r.image_url} for r in results]
-        return jsonify({"products": response})
-    finally:
-        session.close()
+    cheapest, most_expensive = price_system.update_product_prices(product_name)
+    if cheapest and most_expensive:
+        return jsonify({
+            "cheapest": cheapest,
+            "most_expensive": most_expensive,
+        })
+    return jsonify({"error": "No products found"}), 404
 
 @app.route("/history", methods=["GET"])
 def fetch_history():
-    session = Session()
+    session = price_system.Session()
     try:
         results = session.query(ProductPrice).all()
-        response = [{"product_name": r.product_name, "brand_name": r.brand_name, "store_name": r.store_name, "price": r.price, "timestamp": r.timestamp.isoformat()} for r in results]
+        response = [
+            {
+                "product_name": r.product_name,
+                "store_name": r.store_name,
+                "price": r.price,
+                "timestamp": r.timestamp.isoformat(),
+            }
+            for r in results
+        ]
         return jsonify(response)
     finally:
         session.close()
+
+def schedule_updates():
+    session = price_system.Session()
+    try:
+        product_names = session.query(ProductPrice.product_name).distinct().all()
+        for name in product_names:
+            price_system.update_product_prices(name[0])
+    except Exception as e:
+        print(f"Error in scheduled updates: {e}")
+    finally:
+        session.close()
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(schedule_updates, "interval", hours=24)
+scheduler.start()
 
 if __name__ == "__main__":
     app.run(debug=True, host="127.0.0.1", port=5000)
