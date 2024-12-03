@@ -29,6 +29,15 @@ class ProductPrice(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
     image_url = Column(String)
 
+# Chrome options for headless browsing
+chrome_options = Options()
+chrome_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--disable-dev-shm-usage")
+chrome_options.add_argument("--headless")
+chrome_options.add_argument(
+    "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
+)
+
 # Price Comparison System
 class PriceComparisonSystem:
     def __init__(self, database_url=None):
@@ -40,52 +49,6 @@ class PriceComparisonSystem:
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 
-        self.chrome_options = Options()
-        #self.chrome_options.add_argument("--headless")
-        self.chrome_options.add_argument("--disable-dev-shm-usage")
-        self.chrome_options.add_argument("--no-sandbox")
-        self.chrome_options.add_argument(
-            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
-        )
-
-        self.scrapers = [
-               {
-                "name": "Carrefour",
-                "url_template": "https://www.carrefoursa.com/search/?text={}",
-                "selectors": {
-                    "product": ".product-card",
-                    "name": ".product-name",
-                    "price": ".price",
-                    "image": ".product-image img",
-                },
-                "store_name": "Carrefour",
-            },
-            {
-               "name": "A101",
-               "url_template": "https://www.a101.com.tr/arama?k={}",
-               "selectors": {
-                    "product": ".product-card",
-                    "name": ".name",
-                    "price": ".price",
-                    "image": ".product-image img",
-                },
-                "store_name": "A101",
-            },
-         
-            {
-                "name": "BIM",
-                "url_template": "https://www.bim.com.tr/Categories?q={}",
-                "selectors": {
-                    "product": ".product-list .product",
-                    "name": ".product-name",
-                    "price": ".price",
-                    "image": "img.product-image",
-                },
-                "store_name": "BIM",
-            },
-            
-        ]
-
     def _clean_price(self, price_str):
         price = re.sub(r"[^\d.]", "", price_str)
         try:
@@ -93,47 +56,85 @@ class PriceComparisonSystem:
         except ValueError:
             return None
 
-    def scrape_website(self, scraper, product_name):
-        driver = webdriver.Chrome(
-            service=Service(ChromeDriverManager().install()), options=self.chrome_options
-        )
+    def scrape_amazon(self, product_name):
         try:
-            driver.get(scraper["url_template"].format(product_name))
-            WebDriverWait(driver, 15).until(
-                EC.presence_of_all_elements_located((By.CSS_SELECTOR, scraper["selectors"]["product"]))
-            )
-            products = driver.find_elements(By.CSS_SELECTOR, scraper["selectors"]["product"])
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+            url = f"https://www.amazon.com.tr/s?k={product_name}"
+            driver.get(url)
+            product_elements = driver.find_elements(By.CSS_SELECTOR, ".s-main-slot .s-result-item")
+
             results = []
-
-            for product in products[:5]:
+            for product in product_elements[:5]:  # Limit to first 5 results
                 try:
-                    name = product.find_element(By.CSS_SELECTOR, scraper["selectors"]["name"]).text.strip()
-                    price_element = product.find_element(By.CSS_SELECTOR, scraper["selectors"]["price"])
-                    price = self._clean_price(price_element.text)
-                    image = product.find_element(By.CSS_SELECTOR, scraper["selectors"]["image"]).get_attribute("src")
+                    name = product.find_element(By.CSS_SELECTOR, "h2 a span").text
+                    brand = name.split()[0]
+                    price = product.find_element(By.CSS_SELECTOR, ".a-price-whole").text
+                    price = float(price.replace('.', '').replace(',', '.'))
+                    results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "Amazon"})
+                except Exception:
+                    continue
 
-                    if name and price:
-                        results.append({
-                            "product_name": name,
-                            "price": price,
-                            "store_name": scraper["store_name"],
-                            "image_url": image or None,
-                        })
-                except Exception as e:
-                    print(f"Error parsing product in {scraper['name']}: {e}")
+            driver.quit()
             return results
         except Exception as e:
-            print(f"Error scraping {scraper['name']}: {e}")
+            print(f"Error scraping Amazon: {e}")
             return []
-        finally:
+
+    def scrape_migros(self, product_name):
+        try:
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+            url = f"https://www.migros.com.tr/arama?q={product_name}"
+            driver.get(url)
+            product_elements = driver.find_elements(By.CSS_SELECTOR, ".product-card-wrapper")
+
+            results = []
+            for product in product_elements[:5]:
+                try:
+                    name = product.find_element(By.CSS_SELECTOR, ".product-name").text
+                    brand = name.split()[0]
+                    price = product.find_element(By.CSS_SELECTOR, ".price-tag").text
+                    price = float(price.replace('TL', '').replace('.', '').replace(',', '.'))
+                    results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "Migros"})
+                except Exception:
+                    continue
+
             driver.quit()
+            return results
+        except Exception as e:
+            print(f"Error scraping Migros: {e}")
+            return []
+
+    def scrape_carrefour(self, product_name):
+        try:
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+            url = f"https://www.carrefoursa.com/search/?text={product_name}"
+            driver.get(url)
+            product_elements = driver.find_elements(By.CSS_SELECTOR, ".pl-grid-cont .item-box")
+
+            results = []
+            for product in product_elements[:5]:
+                try:
+                    name = product.find_element(By.CSS_SELECTOR, ".item-name").text
+                    brand = name.split()[0]
+                    price = product.find_element(By.CSS_SELECTOR, ".price-tag").text
+                    price = float(price.replace('TL', '').replace('.', '').replace(',', '.'))
+                    results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "CarrefourSA"})
+                except Exception:
+                    continue
+
+            driver.quit()
+            return results
+        except Exception as e:
+            print(f"Error scraping CarrefourSA: {e}")
+            return []
 
     def update_product_prices(self, product_name):
         session = self.Session()
         try:
             results = []
-            for scraper in self.scrapers:
-                results.extend(self.scrape_website(scraper, product_name))
+            results.extend(self.scrape_amazon(product_name))
+            results.extend(self.scrape_migros(product_name))
+            results.extend(self.scrape_carrefour(product_name))
 
             if results:
                 cheapest = min(results, key=lambda x: x["price"])
@@ -149,6 +150,7 @@ class PriceComparisonSystem:
         finally:
             session.close()
 
+# Flask App
 app = Flask(__name__)
 CORS(app)
 
