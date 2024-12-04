@@ -87,14 +87,14 @@ class PriceComparisonSystem:
             driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
             url = f"https://www.a101.com.tr/arama?k={product_name}"
             driver.get(url)
-            product_elements = driver.find_elements(By.CSS_SELECTOR, ".product")
+            product_elements = driver.find_elements(By.CSS_SELECTOR, ".list-none")
 
             results = []
             for product in product_elements[:5]:  # Limit to first 5 results
                 try:
-                    name = product.find_element(By.CSS_SELECTOR, ".product-name").text 
+                    name = product.find_element(By.CSS_SELECTOR, ".mt-2").text 
                     brand = name.split()[0] 
-                    price = product.find_element(By.CSS_SELECTOR, ".product-price").text 
+                    price = product.find_element(By.CSS_SELECTOR, ".mt-2.5 h-full flex flex-col justify-end mb-3").text 
                     price = float(price.replace('.', '').replace(',', '.')) 
                     results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "A101"})
                 except Exception:
@@ -106,28 +106,28 @@ class PriceComparisonSystem:
             print(f"Error scraping Amazon: {e}")
             return []
 
-    def scrape_migros(self, product_name):
+    def scrape_amazon(self, product_name):
         try:
             driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-            url = f"https://www.migros.com.tr/arama?q={product_name}"
+            url = f"https://www.amazon.com.tr/s?k={product_name}"
             driver.get(url)
-            product_elements = driver.find_elements(By.CSS_SELECTOR, ".product-card-wrapper")
+            product_elements = driver.find_elements(By.CSS_SELECTOR, ".s-main-slot .s-result-item")
 
             results = []
-            for product in product_elements[:5]:
+            for product in product_elements[:5]:  # Limit to first 5 results
                 try:
-                    name = product.find_element(By.CSS_SELECTOR, ".product-name").text
+                    name = product.find_element(By.CSS_SELECTOR, "h2 a span").text
                     brand = name.split()[0]
-                    price = product.find_element(By.CSS_SELECTOR, ".price-tag").text
-                    price = float(price.replace('TL', '').replace('.', '').replace(',', '.'))
-                    results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "Migros"})
+                    price = product.find_element(By.CSS_SELECTOR, ".a-price-whole").text
+                    price = float(price.replace('.', '').replace(',', '.'))
+                    results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "Amazon"})
                 except Exception:
                     continue
 
             driver.quit()
             return results
         except Exception as e:
-            print(f"Error scraping Migros: {e}")
+            print(f"Error scraping Amazon: {e}")
             return []
 
 
@@ -137,7 +137,7 @@ class PriceComparisonSystem:
             results = []
             results.extend(self.scrape_carrefour(product_name))
             results.extend(self.scrape_a101(product_name))
-            results.extend(self.scrape_migros(product_name))
+            results.extend(self.scrape_amazon(product_name))
             
 
             if results:
