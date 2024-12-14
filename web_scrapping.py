@@ -17,7 +17,6 @@ from selenium.common.exceptions import WebDriverException, TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 from apscheduler.schedulers.background import BackgroundScheduler
 
-
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -69,7 +68,6 @@ class PriceComparisonSystem:
         if not price_str:
             return None
         try:
-            # Remove all non-numeric characters except dots and commas, and replace ',' with '.'
             price = re.sub(r'[^\d.,]', '', price_str).replace(',', '.')
             return float(price)
         except ValueError:
@@ -237,4 +235,9 @@ def main():
     scheduler = BackgroundScheduler()
     scheduler.add_job(schedule_updates, 'interval', hours=24)
     scheduler.start()
-   
+
+    app = create_app()
+    app.run(host="0.0.0.0", port=5000)
+
+if __name__ == "__main__":
+    main()
