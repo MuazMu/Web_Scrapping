@@ -1,19 +1,26 @@
 import os
-import json
+import logging
+import re
+from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.exc import SQLAlchemyError
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
-from sqlalchemy.orm import sessionmaker, declarative_base
-from datetime import datetime
-import re
-from apscheduler.schedulers.background import BackgroundScheduler
+from selenium.common.exceptions import WebDriverException, TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
+from apscheduler.schedulers.background import BackgroundScheduler
+
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # SQLAlchemy Base
 Base = declarative_base()
@@ -27,185 +34,207 @@ class ProductPrice(Base):
     store_name = Column(String)
     price = Column(Float, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
-    image_url = Column(String)
 
-# Chrome options for headless browsing
-chrome_options = Options()
-chrome_options.add_argument("--no-sandbox")
-chrome_options.add_argument("--disable-dev-shm-usage")
-#chrome_options.add_argument("--headless")
-chrome_options.add_argument(
-    "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
-)
+    def to_dict(self):
+        return {
+            "product_name": self.product_name,
+            "brand_name": self.brand_name,
+            "store_name": self.store_name,
+            "price": self.price,
+            "timestamp": self.timestamp.isoformat()
+        }
 
 # Price Comparison System
 class PriceComparisonSystem:
     def __init__(self, database_url=None):
         self.database_url = database_url or os.getenv(
             "DATABASE_URL",
-            r"mssql+pyodbc://@localhost\SQLEXPRESS/Market_Automation?driver=ODBC+Driver+17+for+SQL+Server&Trusted_Connection=yes",
+            r"mssql+pyodbc://@localhost\SQLEXPRESS/Market_Automation?driver=ODBC+Driver+17+for+SQL+Server&Trusted_Connection=yes"
         )
-        self.engine = create_engine(self.database_url)
-        Base.metadata.create_all(self.engine)
-        self.Session = sessionmaker(bind=self.engine)
+        try:
+            self.engine = create_engine(self.database_url, pool_pre_ping=True)
+            Base.metadata.create_all(self.engine)
+            self.Session = sessionmaker(bind=self.engine)
+        except Exception as e:
+            logger.error(f"Database connection error: {e}")
+            raise
+
+        self.chrome_options = Options()
+        self.chrome_options.add_argument("--no-sandbox")
+        self.chrome_options.add_argument("--disable-dev-shm-usage")
+        self.chrome_options.add_argument("--headless")
+        self.chrome_options.add_argument("--disable-gpu")
 
     def _clean_price(self, price_str):
-        price = re.sub(r"[^\d.]", "", price_str)
+        if not price_str:
+            return None
         try:
+            # Remove all non-numeric characters except dots and commas, and replace ',' with '.'
+            price = re.sub(r'[^\d.,]', '', price_str).replace(',', '.')
             return float(price)
         except ValueError:
+            logger.warning(f"Failed to clean price: {price_str}")
             return None
-        
-        
-    def scrape_carrefour(self, product_name):
+
+    def _create_webdriver(self):
         try:
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-            url = f"https://www.carrefoursa.com/search/?text={product_name}"
-            driver.get(url)
-            product_elements = driver.find_elements(By.CSS_SELECTOR, ".pl-grid-cont .item-box")
+            return webdriver.Chrome(
+                service=Service(ChromeDriverManager().install()),
+                options=self.chrome_options
+            )
+        except WebDriverException as e:
+            logger.error(f"WebDriver error: {e}")
+            return None
 
-            results = []
-            for product in product_elements[:5]:
-                try:
-                    name = product.find_element(By.CSS_SELECTOR, ".item-name").text
-                    brand = name.split()[0]
-                    price = product.find_element(By.CSS_SELECTOR, ".price-tag").text
-                    price = float(price.replace('TL', '').replace('.', '').replace(',', '.'))
-                    results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "CarrefourSA"})
-                except Exception:
-                    continue
-
-            driver.quit()
-            return results
-        except Exception as e:
-            print(f"Error scraping CarrefourSA: {e}")
-            return []
-        
-
-    def scrape_a101(self, product_name):
-        try:
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-            url = f"https://www.a101.com.tr/arama?k={product_name}"
-            driver.get(url)
-            product_elements = driver.find_elements(By.CSS_SELECTOR, ".list-none")
-
-            results = []
-            for product in product_elements[:5]:  # Limit to first 5 results
-                try:
-                    name = product.find_element(By.CSS_SELECTOR, ".mt-2").text 
-                    brand = name.split()[0] 
-                    price = product.find_element(By.CSS_SELECTOR, ".mt-2.5 h-full flex flex-col justify-end mb-3").text 
-                    price = float(price.replace('.', '').replace(',', '.')) 
-                    results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "A101"})
-                except Exception:
-                    continue
-
-            driver.quit()
-            return results
-        except Exception as e:
-            print(f"Error scraping Amazon: {e}")
+    def scrape_akakce(self, product_name):
+        driver = self._create_webdriver()
+        if not driver:
             return []
 
-    def scrape_amazon(self, product_name):
         try:
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-            url = f"https://www.amazon.com.tr/s?k={product_name}"
+            url = f"https://www.akakce.com/arama/?q={product_name.replace(' ', '+')}"
             driver.get(url)
-            product_elements = driver.find_elements(By.CSS_SELECTOR, ".s-main-slot .s-result-item")
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".pList"))
+            )
 
             results = []
-            for product in product_elements[:5]:  # Limit to first 5 results
+            product_elements = driver.find_elements(By.CSS_SELECTOR, ".pList")[:5]
+            for product in product_elements:
                 try:
-                    name = product.find_element(By.CSS_SELECTOR, "h2 a span").text
-                    brand = name.split()[0]
-                    price = product.find_element(By.CSS_SELECTOR, ".a-price-whole").text
-                    price = float(price.replace('.', '').replace(',', '.'))
-                    results.append({"product_name": name, "brand_name": brand, "price": price, "store_name": "Amazon"})
-                except Exception:
-                    continue
-
-            driver.quit()
+                    name_elem = product.find_element(By.CSS_SELECTOR, ".pName a")
+                    name = name_elem.text.strip()
+                    price_elem = product.find_element(By.CSS_SELECTOR, ".pFiyat")
+                    price = self._clean_price(price_elem.text.strip())
+                    brand = name.split()[0] if name else "Unknown"
+                    results.append({
+                        "product_name": name,
+                        "brand_name": brand,
+                        "price": price,
+                        "store_name": "Akakce"
+                    })
+                except Exception as e:
+                    logger.warning(f"Error processing Akakce product: {e}")
             return results
         except Exception as e:
-            print(f"Error scraping Amazon: {e}")
+            logger.error(f"Akakce scraping error: {e}")
+            return []
+        finally:
+            driver.quit()
+
+    def scrape_cimri(self, product_name):
+        driver = self._create_webdriver()
+        if not driver:
             return []
 
+        try:
+            url = f"https://www.cimri.com/arama?q={product_name.replace(' ', '+')}"
+            driver.get(url)
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "[data-testid='product-card']"))
+            )
+
+            results = []
+            product_elements = driver.find_elements(By.CSS_SELECTOR, "[data-testid='product-card']")[:5]
+            for product in product_elements:
+                try:
+                    name_elem = product.find_element(By.CSS_SELECTOR, "[data-testid='product-name']")
+                    name = name_elem.text.strip()
+                    price_elem = product.find_element(By.CSS_SELECTOR, "[data-testid='product-price']")
+                    price = self._clean_price(price_elem.text.strip())
+                    brand = name.split()[0] if name else "Unknown"
+                    results.append({
+                        "product_name": name,
+                        "brand_name": brand,
+                        "price": price,
+                        "store_name": "Cimri"
+                    })
+                except Exception as e:
+                    logger.warning(f"Error processing Cimri product: {e}")
+            return results
+        except Exception as e:
+            logger.error(f"Cimri scraping error: {e}")
+            return []
+        finally:
+            driver.quit()
 
     def update_product_prices(self, product_name):
         session = self.Session()
         try:
-            results = []
-            results.extend(self.scrape_carrefour(product_name))
-            results.extend(self.scrape_a101(product_name))
-            results.extend(self.scrape_amazon(product_name))
-            
+            results = self.scrape_akakce(product_name) + self.scrape_cimri(product_name)
+            valid_results = [r for r in results if r['price'] is not None]
 
-            if results:
-                cheapest = min(results, key=lambda x: x["price"])
-                most_expensive = max(results, key=lambda x: x["price"])
-
+            if valid_results:
+                cheapest = min(valid_results, key=lambda x: x['price'])
+                most_expensive = max(valid_results, key=lambda x: x['price'])
                 session.add_all([ProductPrice(**cheapest), ProductPrice(**most_expensive)])
                 session.commit()
                 return cheapest, most_expensive
+
+            logger.warning(f"No valid results for product: {product_name}")
             return None, None
-        except Exception as e:
-            print(f"Error updating database: {e}")
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"Database error: {e}")
             return None, None
         finally:
             session.close()
 
 # Flask App
-app = Flask(__name__)
-CORS(app)
+def create_app():
+    app = Flask(__name__)
+    CORS(app)
+    price_system = PriceComparisonSystem()
 
-price_system = PriceComparisonSystem()
+    @app.route("/compare", methods=["GET"])
+    def compare_prices():
+        product_name = request.args.get("product_name", "").strip()
+        if not product_name:
+            return jsonify({"error": "Product name is required"}), 400
 
-@app.route("/compare", methods=["GET"])
-def compare_prices():
-    product_name = request.args.get("product_name", "").strip()
-    if not product_name:
-        return jsonify({"error": "Product name is required"}), 400
+        session = price_system.Session()
+        try:
+            results = session.query(ProductPrice).filter_by(product_name=product_name).all()
+            if not results:
+                return jsonify({"error": "No products found"}), 404
 
-    cheapest, most_expensive = price_system.update_product_prices(product_name)
-    if cheapest and most_expensive:
-        return jsonify({
-            "cheapest": cheapest,
-            "most_expensive": most_expensive,
-        })
-    return jsonify({"error": "No products found"}), 404
+            sorted_results = sorted(results, key=lambda x: x.price)
+            return jsonify({
+                "cheapest": sorted_results[0].to_dict(),
+                "most_expensive": sorted_results[-1].to_dict(),
+            })
+        except SQLAlchemyError as e:
+            return jsonify({"error": str(e)}), 500
+        finally:
+            session.close()
 
-@app.route("/history", methods=["GET"])
-def fetch_history():
-    session = price_system.Session()
-    try:
-        results = session.query(ProductPrice).all()
-        response = [
-            {
-                "product_name": r.product_name,
-                "store_name": r.store_name,
-                "price": r.price,
-                "timestamp": r.timestamp.isoformat(),
-            }
-            for r in results
-        ]
-        return jsonify(response)
-    finally:
-        session.close()
+    @app.route("/history", methods=["GET"])
+    def fetch_history():
+        session = price_system.Session()
+        try:
+            results = session.query(ProductPrice).all()
+            return jsonify([r.to_dict() for r in results])
+        except SQLAlchemyError as e:
+            return jsonify({"error": str(e)}), 500
+        finally:
+            session.close()
+
+    return app
 
 def schedule_updates():
+    price_system = PriceComparisonSystem()
     session = price_system.Session()
     try:
         product_names = session.query(ProductPrice.product_name).distinct().all()
-        for name in product_names:
-            price_system.update_product_prices(name[0])
-    except Exception as e:
-        print(f"Error in scheduled updates: {e}")
+        for name_tuple in product_names:
+            price_system.update_product_prices(name_tuple[0])
+    except SQLAlchemyError as e:
+        logger.error(f"Database error: {e}")
     finally:
         session.close()
 
-scheduler = BackgroundScheduler()
-scheduler.add_job(schedule_updates, "interval", hours=24)
-scheduler.start()
-
-if __name__ == "__main__":
-    app.run(debug=True, host="127.0.0.1", port=5000)
+def main():
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(schedule_updates, 'interval', hours=24)
+    scheduler.start()
+   
