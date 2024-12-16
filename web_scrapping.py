@@ -32,15 +32,15 @@ def scrape_cimri(product_name):
         url = f"https://www.cimri.com/arama?q={product_name}"
         driver.get(url)
         WebDriverWait(driver, 10).until(
-            EC.presence_of_all_elements_located((By.XPATH, "//div[contains(@class, 'Wrapper_productCard')]"))
+            EC.presence_of_all_elements_located((By.SELECTOR, ".Wrapper_productCard__1act7"))
         )
 
-        product_elements = driver.find_elements(By.XPATH, "//div[contains(@class, 'Wrapper_productCard')")
+        product_elements = driver.find_elements(By.SELECTOR, ".Wrapper_productCard__1act7")
         results = []
         for product in product_elements[:10]:
             try:
-               name = product.find_element(By.XPATH, "//div[@id='__next']//div[@class='product-name']").text
-               price = product.find_element(By.XPATH, "//div[@id='__next']//span[@class='product-price']").text  
+               name = product.find_element(By.SELECTOR, ".ProductCard_productName__35zi5").text
+               price = product.find_element(By.SELECTOR, ".ProductCard_price__10UHp']").text  
                price = float(price.replace('TL', '').replace('.', '').replace(',', '.'))              
                results.append({"product_name": name, "price": price, "store_name": "Cimri"})
             except Exception as e:
@@ -64,16 +64,16 @@ def scrape_carrefour(product_name):
     driver.get(url)
 
     WebDriverWait(driver, 10).until(
-        EC.presence_of_all_elements_located((By.XPATH, "//main//div[2]/div[2]"))
+        EC.presence_of_all_elements_located((By.SELECTOR, ".product-listing product-grid container-fluid"))
     )
 
-    product_elements = driver.find_elements(By.XPATH, "//main//div[2]/div[2]")
+    product_elements = driver.find_elements(By.SELECTOR, ".product-listing product-grid container-fluid")
     results = []
     for product in product_elements[:10]:
       try:
         # Improved XPath for product name
-        name = product.find_element(By.XPATH, ".//h3").text
-        price_element = product.find_element(By.XPATH, ".//span[2]")
+        name = product.find_element(By.SELECTOR, ".item-name").text
+        price_element = product.find_element(By.SELECTOR, ".item-price js-variant-discounted-price")
         price = float(price_element.text.replace('TL', '').replace('.', '').replace(',', '.'))
         results.append({"product_name": name, "price": price, "store_name": "CarrefourSA"})
       except Exception: 
