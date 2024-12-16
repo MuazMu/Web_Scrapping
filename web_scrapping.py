@@ -72,15 +72,15 @@ def scrape_trendyol(product_name):
         driver.get(url)
 
         WebDriverWait(driver, 30).until(
-            EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".prdct-cntnr-wrppr selectorgadget_selected"))
+            EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".prdct-cntnr-wrppr"))
         )
 
-        product_elements = driver.find_elements(By.CSS_SELECTOR, ".prdct-cntnr-wrppr selectorgadget_selected")
+        product_elements = driver.find_elements(By.CSS_SELECTOR, ".prdct-cntnr-wrppr")
         results = []
         for product in product_elements[:10]:
             try:
-                name = product.find_element(By.CSS_SELECTOR, ".prdct-desc-cntnr").text
-                price = product.find_element(By.CSS_SELECTOR, ".prc-box-dscntd selectorgadget_rejected").text
+                name = product.find_element(By.CSS_SELECTOR, ".prdct-desc-cntnr-ttl-w").text
+                price = product.find_element(By.CSS_SELECTOR, ".prc-box-dscntd").text
                 if not price.strip():
                     logging.warning(f"Empty price field for product: {name}")
                     continue
