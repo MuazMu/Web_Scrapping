@@ -9,6 +9,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from datetime import datetime
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -21,24 +23,28 @@ chrome_options = Options()
 chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
 #chrome_options.add_argument("--headless")
+chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 
 # Function to scrape Cimri
 def scrape_cimri(product_name):
     try:
         driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-        url = f"https://www.cimri.com/market/arama?q={product_name}"
+        url = f"https://www.cimri.com/arama?q={product_name}"
         driver.get(url)
-        product_elements = driver.find_elements(By.CSS_SELECTOR, ".s-product")
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_all_elements_located((By.XPATH, "//div[contains(@class, 'Wrapper_productCard')]"))
+        )
 
+        product_elements = driver.find_elements(By.XPATH, "//div[contains(@class, 'Wrapper_productCard')")
         results = []
-        for product in product_elements[:5]:
+        for product in product_elements[:10]:
             try:
-                name = product.find_element(By.CSS_SELECTOR, ".ProductCard_productName__35zi5").text
-                price = product.find_element(By.CSS_SELECTOR, ".ProductCard_price__10UHp selectorgadget_rejected").text
-                price = float(price.replace('TL', '').replace('.', '').replace(',', '.'))
-                sname= product.find_element(By.CSS_SELECTOR, ".WrapperBox_wrapper__1_OBD WrapperBox_left__2PpFA WrapperBox_small__VfD9r").get_attribute("src")
-                results.append({"product_name": name, "price": price, "store_name": sname})
-            except Exception:
+               name = product.find_element(By.XPATH, "//div[@id='__next']//div[@class='product-name']").text
+               price = product.find_element(By.XPATH, "//div[@id='__next']//span[@class='product-price']").text  
+               price = float(price.replace('TL', '').replace('.', '').replace(',', '.'))              
+               results.append({"product_name": name, "price": price, "store_name": "Cimri"})
+            except Exception as e:
+                print(f"Error parsing product: {e}")
                 continue
 
         driver.quit()
@@ -47,29 +53,39 @@ def scrape_cimri(product_name):
         print(f"Error scraping Cimri: {e}")
         return []
 
+
 # Function to scrape CarrefourSA
 def scrape_carrefour(product_name):
-    try:
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-        url = f"https://www.carrefoursa.com/search/?text={product_name}"
-        driver.get(url)
-        product_elements = driver.find_elements(By.CSS_SELECTOR, ".pl-grid-cont")
+  try:
+    # Set up Chrome driver
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
 
-        results = []
-        for product in product_elements[:5]:
-            try:
-                name = product.find_element(By.CSS_SELECTOR, ".item-name selectorgadget_suggested").text
-                price = product.find_element(By.CSS_SELECTOR, ".item-price js-variant-discounted-price").text
-                price = float(price.replace('TL', '').replace('.', '').replace(',', '.'))
-                results.append({"product_name": name, "price": price, "store_name": "CarrefourSA"})
-            except Exception:
-                continue
+    url = f"https://www.carrefoursa.com/search/?text={product_name}"
+    driver.get(url)
 
-        driver.quit()
-        return results
-    except Exception as e:
-        print(f"Error scraping CarrefourSA: {e}")
-        return []
+    WebDriverWait(driver, 10).until(
+        EC.presence_of_all_elements_located((By.XPATH, "//main//div[2]/div[2]"))
+    )
+
+    product_elements = driver.find_elements(By.XPATH, "//main//div[2]/div[2]")
+    results = []
+    for product in product_elements[:10]:
+      try:
+        # Improved XPath for product name
+        name = product.find_element(By.XPATH, ".//h3").text
+        price_element = product.find_element(By.XPATH, ".//span[2]")
+        price = float(price_element.text.replace('TL', '').replace('.', '').replace(',', '.'))
+        results.append({"product_name": name, "price": price, "store_name": "CarrefourSA"})
+      except Exception: 
+        print(f"Error parsing product: {e}")   
+        continue
+
+    driver.quit()
+    return results
+
+  except Exception as e:
+    print(f"Error scraping CarrefourSA: {e}")
+    return []
 
 # Function to save products to the database
 def save_to_database(product_name, cheapest, most_expensive):
