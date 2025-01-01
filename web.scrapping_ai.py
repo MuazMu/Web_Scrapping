@@ -45,7 +45,7 @@ def get_store_urls():
         "trendyol": "https://www.trendyol.com/sr?q=",
         "hepsiburada": "https://www.hepsiburada.com/ara?q=",
         "sok": "https://www.sokmarket.com.tr/arama?q=",
-        "cimri": "https://www.cimri.com/market/arama?q="
+        
     }
 
 def name_to_url(name):
@@ -74,12 +74,7 @@ def extract_selectors(store_name):
             "product_card": ".category-listing_productListing__etprE",
             "name": ".CProductCard-module_title__u8bMW",
             "price": ".CPriceBox-module_price__bYk-c",
-        },
-        "cimri": {
-            "product_card": ".Wrapper_productCard__1act7",
-            "name": ".ProductCard_productName__35zi5",
-            "price": ".ProductCard_footer__Fc9OL",
-        },
+        },     
         "hepsiburada": {
             "product_card": ".productListContent-wrapper",
             "name": "h3.product-title",
